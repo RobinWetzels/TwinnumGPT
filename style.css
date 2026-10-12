@@ -2,8 +2,8 @@
 :root {
   --accent: #F01e2c;            /* overwritten by config.js */
   --accent-text: #ffffff;
-  --bg: #f6f6f8;
-  --surface: #ffffff;
+  --bg: #ABB9FF;
+  --surface: #FFF7A8;
   --text: #FF9C9C;
   --muted: #6b6b76;
   --border: #e2e2e8;
