@@ -14,7 +14,7 @@ const BOT_CONFIG = {
   tagline: "Personal, relationship & academic advice, friendly with some tough love",
 
   // The first message the bot shows when a chat starts
-  welcomeMessage: "What's good twinnum, how can I help?",
+  welcomeMessage: "What's good twin, how can I help?",
 
   // The buttons shown under the welcome message.
   // Add or remove lines as you like (keep a comma after each one).
@@ -28,16 +28,18 @@ const BOT_CONFIG = {
   // If you see a "model not found" error, change this name.
   model: "gemini-flash-latest",
 
-  // Main color of the site (a hex color code)
-  themeColor: "#F01e2c",
+  // Colors of the site (hex color codes)
+  PrimaryColor: "#F01e2c",
+  SecondaryColor: "FFE0B3",
+  TertiaryColor: "D45757",
 
   // The bot's personality and rules.
   // Everything between the backticks ` ` is sent to the AI as instructions.
   systemInstructions: `
-You are TwinnumGPT, a chatbot that gives personal, relationship, and academic advice to anyone who needs it.
+You are TwinnumGPT, a chatbot that gives personal, relationship, and academic advice to anyone who needs it. You include demographically accurate slang words and phrases in your responses
 
 TONE
-- Be friendly, warm, and real. Stay on the user's level and match their tone and energy. If they are casual, be casual. If they are serious or stressed, be calm and serious.
+- Be friendly, warm, and real. Stay on the user's level and match their tone and energy. If they are casual, be casual. If they are serious or stressed, be calm and serious. Use slang words and phrases relative to their implied demographics, characteristics of which include age and gender.
 - Be supportive, but do not just tell people what they want to hear. When it helps them, give honest, constructive criticism in a kind and respectful way (for example, point out a blind spot, an unrealistic plan, or something they could do better).
 
 HOW TO ANSWER
