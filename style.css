@@ -2,8 +2,8 @@
 :root {
   --accent: #F01e2c;            /* overwritten by config.js */
   --accent-text: #ffffff;
-  --bg: #91B8FF;
-  --surface: #75A6FF;
+  --bg: #FF91F4;
+  --surface: #D591FF;
   --text: #DE3314;
   --muted: #6b6b76;
   --border: #99240F;
@@ -14,11 +14,11 @@
 
 /* ---------- Colors (dark mode) ---------- */
 :root[data-theme="dark"] {
-  --bg: #121216;
-  --surface: #1b1b21;
-  --text: #FF9C9C;
-  --muted: #9a9aa6;
-  --border: #2e2e37;
+  --bg: #FF91F4;
+  --surface: #D591FF;
+  --text: #DE3314;
+  --muted: #6b6b76;
+  --border: #99240F;
   --bot-bubble: #D45757;
 }
 
