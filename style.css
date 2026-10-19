@@ -2,11 +2,11 @@
 :root {
   --accent: #F01e2c;            /* overwritten by config.js */
   --accent-text: #ffffff;
-  --bg: #ABB9FF;
-  --surface: #FFF7A8;
-  --text: #FF9C9C;
+  --bg: #91B8FF;
+  --surface: #75A6FF;
+  --text: #DE3314;
   --muted: #6b6b76;
-  --border: #e2e2e8;
+  --border: #99240F;
   --bot-bubble: #D45757;
   --user-bubble: var(--accent);
   --user-text: var(--accent-text);
