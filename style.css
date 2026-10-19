@@ -1,7 +1,7 @@
 /* ---------- Colors (light mode) ---------- */
 :root {
   --accent: #F01e2c;            /* overwritten by config.js */
-  --accent-text: #ffffff;
+  --accent-text: #858585;
   --bg: #FF91F4;
   --surface: #D591FF;
   --text: #DE3314;
