@@ -28,6 +28,11 @@ const BOT_CONFIG = {
   // If you see a "model not found" error, change this name.
   model: "gemini-flash-latest",
 
+  // How much the model "thinks" before answering. Less thinking = faster replies.
+  // Options: "MINIMAL", "LOW", "MEDIUM", "HIGH", or "" to leave it at Google's default.
+  // (If your model doesn't support this setting, the bot quietly skips it.)
+  thinkingLevel: "LOW",
+
   // Main color of the site (top bar, your message bubbles, buttons).
   // Must be a hex code that starts with #
   PrimaryColor: "#F01e2c",
