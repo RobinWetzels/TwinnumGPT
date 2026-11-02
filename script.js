@@ -25,7 +25,8 @@
   let history = [];
   let waiting = false;
   let knowledgeText = "";
-  let useThinkingConfig = !!cfg.thinkingLevel; // switched off automatically if the model rejects it
+  // Which "less thinking" setting works for this model (found automatically)
+  let thinkingMode = cfg.thinkingLevel ? "level" : "none";
 
   // ---------- Safe storage helpers (never crash if blocked) ----------
   function storageGet(store, name) {
@@ -224,15 +225,26 @@
       encodeURIComponent(cfg.model) +
       ":streamGenerateContent?alt=sse";
 
-    function sendRequest(withThinking) {
+    // Only send the most recent messages so long chats don't slow things down
+    function recentHistory() {
+      const max = cfg.maxHistoryMessages || 20;
+      let recent = history.slice(-max);
+      while (recent.length && recent[0].role !== "user") recent = recent.slice(1);
+      return recent;
+    }
+
+    // thinkingMode: "level" (newer models), "budget" (Gemini 2.5 models), or "none"
+    function sendRequest(thinkingMode) {
       const payload = {
         systemInstruction: { parts: [{ text: buildSystemText() }] },
-        contents: history
+        contents: recentHistory()
       };
-      if (withThinking) {
+      if (thinkingMode === "level") {
         payload.generationConfig = {
           thinkingConfig: { thinkingLevel: String(cfg.thinkingLevel).toUpperCase() }
         };
+      } else if (thinkingMode === "budget") {
+        payload.generationConfig = { thinkingConfig: { thinkingBudget: 0 } };
       }
       return fetch(url, {
         method: "POST",
@@ -244,19 +256,21 @@
       });
     }
 
-    let response = await sendRequest(useThinkingConfig);
-
-    // Some models don't accept the thinking setting. If so, retry once without it.
-    if (!response.ok && response.status === 400 && useThinkingConfig) {
-      let detail = "";
+    async function errorDetail(res) {
       try {
-        const body = await response.clone().json();
-        detail = (body && body.error && body.error.message) || "";
-      } catch (e) { /* no readable body */ }
-      if (/think/i.test(detail)) {
-        useThinkingConfig = false;
-        response = await sendRequest(false);
-      }
+        const body = await res.clone().json();
+        return (body && body.error && body.error.message) || "";
+      } catch (e) { return ""; }
+    }
+
+    // Try the fastest setting first. If the model rejects it, fall back and
+    // remember what worked so later messages don't repeat the failed attempt.
+    let response = await sendRequest(thinkingMode);
+    while (!response.ok && response.status === 400 && thinkingMode !== "none") {
+      const detail = await errorDetail(response);
+      if (/api key/i.test(detail)) break; // a real key problem, not a thinking problem
+      thinkingMode = thinkingMode === "level" ? "budget" : "none";
+      response = await sendRequest(thinkingMode);
     }
 
     if (!response.ok) {
