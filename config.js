@@ -50,7 +50,7 @@ const BOT_CONFIG = {
   // How the bot finds the right note for a question:
   //   "meaning"  = matches by meaning, so reworded questions still work (default)
   //   "keywords" = matches only on shared words
-  searchMethod: "keywords",
+  searchMethod: "meaning",
 
   // How many notes to give the bot per question (at most)
   topK: 3,
