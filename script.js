@@ -717,6 +717,23 @@
     if (e.key === "Escape" && !keyModal.hidden) closeKeyModal();
   });
 
+  // ---------- Keep the message box ready ----------
+  // Puts the cursor back in the message box when the page loads and whenever
+  // you switch back to this tab. Skipped on touch screens so the keyboard
+  // doesn't pop up on its own, and while the API key box is open.
+  const isTouchDevice = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+
+  function focusInput() {
+    if (isTouchDevice || !keyModal.hidden) return;
+    inputEl.focus();
+  }
+
+  window.addEventListener("focus", focusInput);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) focusInput();
+  });
+
   // ---------- Go! ----------
   startChat();
+  focusInput();
 })();
