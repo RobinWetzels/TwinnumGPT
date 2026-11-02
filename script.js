@@ -304,7 +304,9 @@
         addBubble("error", friendlyError(err));
         if (err.keyProblem) openKeyModal();
       } else {
-        addBubble("error", "Can't reach the internet right now. Check your connection and try again.");
+        console.error("Chat request failed:", err);
+        const why = err && err.message ? " (" + err.name + ": " + err.message + ")" : "";
+        addBubble("error", "I couldn't reach Google" + why + ". Check your connection, your API key, and any ad blocker or school network filter, then try again.");
       }
       inputEl.value = text; // put their message back so they can resend
       autoGrow();
@@ -379,8 +381,14 @@
   $("keyCancel").addEventListener("click", closeKeyModal);
 
   $("keySave").addEventListener("click", function () {
-    const key = keyInput.value.trim();
+    // Remove any spaces or line breaks picked up while copying
+    const key = keyInput.value.replace(/\s+/g, "");
     if (!key) { keyInput.focus(); return; }
+    if (!/^[\x21-\x7E]+$/.test(key)) {
+      alert("That key has a character that isn't allowed. Copy it again straight from aistudio.google.com/apikey.");
+      keyInput.focus();
+      return;
+    }
     storageSet("sessionStorage", KEY_NAME, key);
     if (rememberBox.checked) {
       storageSet("localStorage", KEY_NAME, key);
