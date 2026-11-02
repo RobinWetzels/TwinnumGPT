@@ -126,8 +126,42 @@
       .replace(/\*(?!\s)([^*]+?)\*/g, "<em>$1</em>");
   }
 
+  // The AI sometimes writes math in LaTeX ($x = 5$, \times, \frac{a}{b}).
+  // This turns it into plain readable text. Dollar amounts like "$5 and $10" are left alone.
+  function cleanMath(text) {
+    function looksLikeMath(s) {
+      return /[\\^_=<>{}+*\/]/.test(s) || /^[A-Za-z]$/.test(s) || /\d\s*-\s*\d/.test(s);
+    }
+    return text
+      // remove the math wrappers
+      .replace(/\$\$([\s\S]+?)\$\$/g, "$1")
+      .replace(/\\\[([\s\S]+?)\\\]/g, "$1")
+      .replace(/\\\(([\s\S]+?)\\\)/g, "$1")
+      .replace(/\$([^\s$](?:[^$\n]*?[^\s$])?)\$/g, function (match, inner) {
+        return looksLikeMath(inner) ? inner : match;
+      })
+      // turn common LaTeX commands into normal symbols
+      .replace(/\\text\{([^}]*)\}/g, "$1")
+      .replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, "($1)/($2)")
+      .replace(/\\sqrt\{([^{}]*)\}/g, "√($1)")
+      .replace(/\\times(?![a-zA-Z])/g, "×")
+      .replace(/\\div(?![a-zA-Z])/g, "÷")
+      .replace(/\\cdot(?![a-zA-Z])/g, "·")
+      .replace(/\\pm(?![a-zA-Z])/g, "±")
+      .replace(/\\leq?(?![a-zA-Z])/g, "≤")
+      .replace(/\\geq?(?![a-zA-Z])/g, "≥")
+      .replace(/\\neq?(?![a-zA-Z])/g, "≠")
+      .replace(/\\approx(?![a-zA-Z])/g, "≈")
+      .replace(/\\pi(?![a-zA-Z])/g, "π")
+      .replace(/\\(left|right)(?![a-zA-Z])/g, "")
+      .replace(/\\%/g, "%")
+      .replace(/\\[,;! ]/g, " ")
+      .replace(/\^2(?![0-9])/g, "²")
+      .replace(/\^3(?![0-9])/g, "³");
+  }
+
   function formatText(text) {
-    const lines = text.replace(/\r/g, "").split("\n");
+    const lines = cleanMath(text).replace(/\r/g, "").split("\n");
     let html = "";
     let listType = null; // "ul", "ol", or null
 
