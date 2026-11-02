@@ -25,6 +25,7 @@
   let history = [];
   let waiting = false;
   let knowledgeText = "";
+  let useThinkingConfig = !!cfg.thinkingLevel; // switched off automatically if the model rejects it
 
   // ---------- Safe storage helpers (never crash if blocked) ----------
   function storageGet(store, name) {
@@ -214,26 +215,49 @@
     "If you're going through something heavy or you don't feel safe, please call or text 988 (US) " +
     "or reach out to someone you trust. Otherwise, try rewording it and I'm right here.";
 
-  // ---------- Talk to Gemini ----------
-  async function askGemini(apiKey) {
+  // ---------- Talk to Gemini (streaming: text appears as it is written) ----------
+  async function askGemini(apiKey, onText) {
     await knowledgeReady;
 
     const url =
       "https://generativelanguage.googleapis.com/v1beta/models/" +
       encodeURIComponent(cfg.model) +
-      ":generateContent";
+      ":streamGenerateContent?alt=sse";
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey
-      },
-      body: JSON.stringify({
+    function sendRequest(withThinking) {
+      const payload = {
         systemInstruction: { parts: [{ text: buildSystemText() }] },
         contents: history
-      })
-    });
+      };
+      if (withThinking) {
+        payload.generationConfig = {
+          thinkingConfig: { thinkingLevel: String(cfg.thinkingLevel).toUpperCase() }
+        };
+      }
+      return fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey
+        },
+        body: JSON.stringify(payload)
+      });
+    }
+
+    let response = await sendRequest(useThinkingConfig);
+
+    // Some models don't accept the thinking setting. If so, retry once without it.
+    if (!response.ok && response.status === 400 && useThinkingConfig) {
+      let detail = "";
+      try {
+        const body = await response.clone().json();
+        detail = (body && body.error && body.error.message) || "";
+      } catch (e) { /* no readable body */ }
+      if (/think/i.test(detail)) {
+        useThinkingConfig = false;
+        response = await sendRequest(false);
+      }
+    }
 
     if (!response.ok) {
       let detail = "";
@@ -251,24 +275,53 @@
       throw err;
     }
 
-    const data = await response.json();
+    // ----- Read the stream of events -----
+    let fullText = "";
+    let blocked = false;
 
-    if (data.promptFeedback && data.promptFeedback.blockReason) {
-      return BLOCKED_REPLY;
+    function handleLine(line) {
+      line = line.trim();
+      if (line.indexOf("data:") !== 0) return;
+      const json = line.slice(5).trim();
+      if (!json || json === "[DONE]") return;
+
+      let data;
+      try { data = JSON.parse(json); } catch (e) { return; }
+
+      if (data.promptFeedback && data.promptFeedback.blockReason) blocked = true;
+
+      const candidate = data.candidates && data.candidates[0];
+      if (candidate && candidate.finishReason === "SAFETY") blocked = true;
+
+      const parts = candidate && candidate.content ? candidate.content.parts || [] : [];
+      parts.forEach(function (p) {
+        if (!p.thought && typeof p.text === "string") fullText += p.text;
+      });
+      if (fullText.trim()) onText(fullText.trim());
     }
 
-    const candidate = data.candidates && data.candidates[0];
-    const parts = candidate && candidate.content ? candidate.content.parts || [] : [];
+    if (response.body && response.body.getReader) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const result = await reader.read();
+        if (result.done) break;
+        buffer += decoder.decode(result.value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop(); // keep the unfinished line for next time
+        lines.forEach(handleLine);
+      }
+      buffer += decoder.decode();
+      if (buffer) buffer.split("\n").forEach(handleLine);
+    } else {
+      // Browser can't stream: read everything at once
+      (await response.text()).split("\n").forEach(handleLine);
+    }
 
-    // Join the text parts and skip any "thought" parts
-    const text = parts
-      .filter(function (p) { return !p.thought && typeof p.text === "string"; })
-      .map(function (p) { return p.text; })
-      .join("")
-      .trim();
-
-    if (text) return text;
-    if (candidate && candidate.finishReason === "SAFETY") return BLOCKED_REPLY;
+    const finalText = fullText.trim();
+    if (finalText) return finalText;
+    if (blocked) return BLOCKED_REPLY;
     return "I couldn't come up with a reply that time. Try asking again.";
   }
 
@@ -292,13 +345,30 @@
     setWaiting(true);
     showThinking();
 
+    let botBubble = null;
+
     try {
-      const reply = await askGemini(apiKey);
+      const reply = await askGemini(apiKey, function (partial) {
+        if (!botBubble) {
+          hideThinking();
+          botBubble = addBubble("bot", partial);
+        } else {
+          botBubble.innerHTML = formatText(partial);
+          scrollToBottom();
+        }
+      });
+
       hideThinking();
+      if (botBubble) {
+        botBubble.innerHTML = formatText(reply);
+        scrollToBottom();
+      } else {
+        addBubble("bot", reply);
+      }
       history.push({ role: "model", parts: [{ text: reply }] });
-      addBubble("bot", reply);
     } catch (err) {
       hideThinking();
+      if (botBubble) botBubble.remove(); // drop a half-finished reply
       history.pop(); // remove the failed question so history stays clean
       if (err && err.status) {
         addBubble("error", friendlyError(err));
