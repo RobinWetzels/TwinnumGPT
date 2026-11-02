@@ -216,7 +216,3 @@ Eleven common logical fallacies to avoid:
 11. Appeal to pity: Manipulating emotions to gain agreement.
 
 Dialogic persuasion means being open to new ideas, avoiding prejudgment, understanding different perspectives, and accepting disagreement.
-
-## What is the rubiks_robin rule and how does it apply to streaming on Twitch?
-
-The rubiks_robin rule means that a Twitch stream must be between 1 to 4 hours for optimal viewer interaction.
