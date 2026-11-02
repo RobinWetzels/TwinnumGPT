@@ -9,6 +9,8 @@
   const cfg = BOT_CONFIG;
   const KEY_NAME = "gemini_api_key";
   const THEME_NAME = "chat_theme";
+  const EMBED_MODEL = "gemini-embedding-001";
+  const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
 
   // ---------- Grab page elements ----------
   const $ = (id) => document.getElementById(id);
@@ -24,7 +26,13 @@
   // Conversation history sent to Gemini: [{ role: "user"|"model", parts: [{text}] }]
   let history = [];
   let waiting = false;
-  let knowledgeText = "";
+
+  // Notes from knowledge.md, one per "## " section: [{ title, text }]
+  let notes = [];
+  let noteVectors = null;   // "meaning" search: one number-list per note
+  let keywordIndex = null;  // keyword search: word counts per note
+  let meaningFailed = false;
+
   // Which "less thinking" setting works for this model (found automatically)
   let thinkingMode = cfg.thinkingLevel ? "level" : "none";
 
@@ -44,7 +52,6 @@
   }
 
   // ---------- Setup page from config ----------
-  // Accepts PrimaryColor (new) or themeColor (old); falls back if missing or invalid.
   function pickThemeColor() {
     const c = cfg.PrimaryColor || cfg.themeColor || "";
     return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(String(c).trim()) ? String(c).trim() : "#D6336C";
@@ -82,8 +89,8 @@
     storageSet("localStorage", THEME_NAME, next);
   });
 
-  // ---------- Knowledge file (optional notes for the bot) ----------
-  // Everything above the first "## " line is ignored.
+  // ---------- Notes file (knowledge.md) ----------
+  // Everything above the first "## " line is ignored. Each "## " section is one note.
   async function loadKnowledge() {
     if (!cfg.knowledgeFile) return;
     try {
@@ -92,20 +99,180 @@
       const raw = await res.text();
       const start = raw.search(/^##\s/m);
       if (start === -1) return;
-      knowledgeText = raw.slice(start).trim();
+      notes = raw
+        .slice(start)
+        .split(/^##\s+/m)
+        .map(function (chunk) { return chunk.trim(); })
+        .filter(Boolean)
+        .map(function (chunk) {
+          const lines = chunk.split("\n");
+          return { title: lines[0].trim(), text: lines.slice(1).join("\n").trim() };
+        });
     } catch (e) {
-      // Happens when opening index.html straight from disk. The bot still works without it.
+      // Happens when opening index.html straight from disk. The bot still works without notes.
       console.warn("Could not load " + cfg.knowledgeFile + " (host the site to use it).");
     }
   }
   const knowledgeReady = loadKnowledge();
 
-  function buildSystemText() {
+  // ---------- Search: keywords ----------
+  const STOP_WORDS = new Set((
+    "the and for are was were been being have has had with this that these those what which who whom why how " +
+    "does did doing can could should would will you your yours our ours their them they his her its from into " +
+    "about than then there here when where also just not but any all some more most very tell explain give list " +
+    "show need want like know mean means please"
+  ).split(" "));
+
+  function stem(word) {
+    if (word.length > 4 && word.endsWith("ies")) return word.slice(0, -3) + "y";
+    if (word.length > 3 && word.endsWith("s") && !word.endsWith("ss")) return word.slice(0, -1);
+    return word;
+  }
+
+  function tokenize(text) {
+    return (text.toLowerCase().match(/[a-z0-9]+/g) || [])
+      .filter(function (w) { return w.length > 2 && !STOP_WORDS.has(w); })
+      .map(stem);
+  }
+
+  function buildKeywordIndex() {
+    const idx = { tf: [], title: [], idf: {} };
+    const df = {};
+    notes.forEach(function (n) {
+      const counts = {};
+      tokenize(n.title + " " + n.text).forEach(function (t) { counts[t] = (counts[t] || 0) + 1; });
+      idx.tf.push(counts);
+      idx.title.push(new Set(tokenize(n.title)));
+      Object.keys(counts).forEach(function (t) { df[t] = (df[t] || 0) + 1; });
+    });
+    Object.keys(df).forEach(function (t) { idx.idf[t] = Math.log(1 + notes.length / df[t]); });
+    return idx;
+  }
+
+  function keywordScores(query) {
+    if (!keywordIndex) keywordIndex = buildKeywordIndex();
+    const words = Array.from(new Set(tokenize(query)));
+    return notes.map(function (note, i) {
+      let score = 0;
+      words.forEach(function (w) {
+        const idf = keywordIndex.idf[w];
+        if (!idf) return;
+        score += idf * ((keywordIndex.title[i].has(w) ? 3 : 0) + Math.min(keywordIndex.tf[i][w] || 0, 3));
+      });
+      return { note: note, score: score };
+    });
+  }
+
+  // ---------- Search: meaning (embeddings) ----------
+  async function embedTexts(texts, apiKey, taskType) {
+    const response = await fetch(API_BASE + EMBED_MODEL + ":batchEmbedContents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        requests: texts.map(function (t) {
+          return {
+            model: "models/" + EMBED_MODEL,
+            content: { parts: [{ text: t }] },
+            taskType: taskType,
+            outputDimensionality: 768
+          };
+        })
+      })
+    });
+    if (!response.ok) throw new Error("Embedding request failed (HTTP " + response.status + ")");
+    const data = await response.json();
+    return data.embeddings.map(function (e) { return e.values; });
+  }
+
+  function cosine(a, b) {
+    let dot = 0, na = 0, nb = 0;
+    for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+    return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+  }
+
+  async function meaningScores(query, apiKey) {
+    if (!noteVectors) {
+      noteVectors = await embedTexts(
+        notes.map(function (n) { return (n.title + "\n" + n.text).slice(0, 6000); }),
+        apiKey,
+        "RETRIEVAL_DOCUMENT"
+      );
+    }
+    const q = (await embedTexts([query], apiKey, "RETRIEVAL_QUERY"))[0];
+    return notes.map(function (note, i) { return { note: note, score: cosine(q, noteVectors[i]) }; });
+  }
+
+  // ---------- Retrieval: pick the notes to show the bot ----------
+  function previousUserText() {
+    for (let i = history.length - 2; i >= 0; i--) {
+      if (history[i].role === "user") return history[i].parts[0].text;
+    }
+    return "";
+  }
+
+  async function retrieve(question, apiKey) {
+    await knowledgeReady;
+    if (!notes.length) return null;
+
+    // Very short follow-ups ("what about the second one?") borrow the previous question
+    let query = question;
+    if (tokenize(question).length < 3) query = previousUserText() + " " + question;
+
+    const wantKeywords = cfg.searchMethod === "keywords";
+    let method = wantKeywords ? "keywords" : "meaning";
+    let scored;
+
+    if (!wantKeywords && !meaningFailed) {
+      try {
+        scored = await meaningScores(query, apiKey);
+      } catch (e) {
+        console.warn("Meaning search failed, using keywords instead:", e);
+        meaningFailed = true;
+      }
+    }
+    if (!scored) {
+      scored = keywordScores(query);
+      method = wantKeywords ? "keywords" : "keywords (meaning search unavailable)";
+    }
+
+    const useMeaning = method === "meaning";
+    const minScore = useMeaning ? (cfg.meaningMinScore || 0.6) : (cfg.keywordMinScore || 4);
+    const window_ = useMeaning ? 0.08 : null; // keep notes close to the best match
+
+    scored.sort(function (a, b) { return b.score - a.score; });
+    const top = scored[0].score;
+    const hits = scored
+      .filter(function (s) {
+        if (s.score < minScore) return false;
+        return useMeaning ? s.score >= top - window_ : s.score >= top * 0.4;
+      })
+      .slice(0, cfg.topK || 3);
+
+    const closest = scored.find(function (s) { return hits.indexOf(s) === -1; });
+
+    function pack(s) {
+      return { title: s.note.title, text: s.note.text, score: s.score };
+    }
+    return { method: method, hits: hits.map(pack), closest: closest ? pack(closest) : null };
+  }
+
+  // ---------- Build the instructions sent with each question ----------
+  function buildSystemText(retrieved) {
     let text = cfg.systemInstructions;
-    if (knowledgeText) {
+    if (!retrieved) return text;
+
+    if (retrieved.hits.length) {
       text +=
-        "\n\nREFERENCE NOTES (use only when relevant to the user's question):\n" +
-        knowledgeText;
+        "\n\nRELEVANT NOTES (found for this question; each begins with its title):\n" +
+        retrieved.hits.map(function (h) { return "NOTE: " + h.title + "\n" + h.text; }).join("\n\n") +
+        "\n\nWhen you use a note, name it at the end of your reply like this: (From my notes: note title). " +
+        "Only name notes you actually used.";
+    } else {
+      text +=
+        "\n\nRELEVANT NOTES: none were found for this question. If the user is asking a communication, " +
+        "public speaking, or presentation course question, start your reply with \"I couldn't find that in my notes\" " +
+        "and then give brief general help, clearly labeled as not coming from the notes. For personal, " +
+        "relationship, or other advice questions, just answer normally and do not mention notes.";
     }
     return text;
   }
@@ -133,14 +300,12 @@
       return /[\\^_=<>{}+*\/]/.test(s) || /^[A-Za-z]$/.test(s) || /\d\s*-\s*\d/.test(s);
     }
     return text
-      // remove the math wrappers
       .replace(/\$\$([\s\S]+?)\$\$/g, "$1")
       .replace(/\\\[([\s\S]+?)\\\]/g, "$1")
       .replace(/\\\(([\s\S]+?)\\\)/g, "$1")
       .replace(/\$([^\s$](?:[^$\n]*?[^\s$])?)\$/g, function (match, inner) {
         return looksLikeMath(inner) ? inner : match;
       })
-      // turn common LaTeX commands into normal symbols
       .replace(/\\text\{([^}]*)\}/g, "$1")
       .replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, "($1)/($2)")
       .replace(/\\sqrt\{([^{}]*)\}/g, "√($1)")
@@ -212,6 +377,33 @@
     return div;
   }
 
+  // "Sources" box under a bot reply: which notes were found, and how well they matched
+  function addSources(retrieved) {
+    if (!retrieved) return;
+    const useMeaning = retrieved.method === "meaning";
+    const fmt = function (n) { return useMeaning ? n.toFixed(2) : n.toFixed(1); };
+
+    let html = "<summary>Sources (" + retrieved.hits.length + ")</summary>";
+    if (retrieved.hits.length) {
+      html += "<ol>" + retrieved.hits.map(function (h) {
+        return "<li>" + escapeHtml(h.title) + " <span class=\"score\">score " + fmt(h.score) + "</span></li>";
+      }).join("") + "</ol>";
+    } else {
+      html += "<p>No note matched this question well enough.</p>";
+    }
+    if (retrieved.closest) {
+      html += "<p class=\"score\">Closest miss: " + escapeHtml(retrieved.closest.title) +
+        " (score " + fmt(retrieved.closest.score) + ")</p>";
+    }
+    html += "<p class=\"score\">Search method: " + escapeHtml(retrieved.method) + "</p>";
+
+    const box = document.createElement("details");
+    box.className = "sources";
+    box.innerHTML = html;
+    messagesEl.appendChild(box);
+    scrollToBottom();
+  }
+
   function showThinking() {
     const div = document.createElement("div");
     div.className = "bubble bot typing";
@@ -251,13 +443,8 @@
     "or reach out to someone you trust. Otherwise, try rewording it and I'm right here.";
 
   // ---------- Talk to Gemini (streaming: text appears as it is written) ----------
-  async function askGemini(apiKey, onText) {
-    await knowledgeReady;
-
-    const url =
-      "https://generativelanguage.googleapis.com/v1beta/models/" +
-      encodeURIComponent(cfg.model) +
-      ":streamGenerateContent?alt=sse";
+  async function askGemini(apiKey, onText, retrieved) {
+    const url = API_BASE + encodeURIComponent(cfg.model) + ":streamGenerateContent?alt=sse";
 
     // Only send the most recent messages so long chats don't slow things down
     function recentHistory() {
@@ -267,25 +454,22 @@
       return recent;
     }
 
-    // thinkingMode: "level" (newer models), "budget" (Gemini 2.5 models), or "none"
-    function sendRequest(thinkingMode) {
+    // mode: "level" (newer models), "budget" (Gemini 2.5 models), or "none"
+    function sendRequest(mode) {
       const payload = {
-        systemInstruction: { parts: [{ text: buildSystemText() }] },
+        systemInstruction: { parts: [{ text: buildSystemText(retrieved) }] },
         contents: recentHistory()
       };
-      if (thinkingMode === "level") {
+      if (mode === "level") {
         payload.generationConfig = {
           thinkingConfig: { thinkingLevel: String(cfg.thinkingLevel).toUpperCase() }
         };
-      } else if (thinkingMode === "budget") {
+      } else if (mode === "budget") {
         payload.generationConfig = { thinkingConfig: { thinkingBudget: 0 } };
       }
       return fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey
-        },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify(payload)
       });
     }
@@ -308,12 +492,7 @@
     }
 
     if (!response.ok) {
-      let detail = "";
-      try {
-        const body = await response.json();
-        detail = (body && body.error && body.error.message) || "";
-      } catch (e) { /* no readable body */ }
-
+      const detail = await errorDetail(response);
       const err = new Error("HTTP " + response.status);
       err.status = response.status;
       err.keyProblem =
@@ -396,6 +575,14 @@
     let botBubble = null;
 
     try {
+      // Find the notes that match this question (never blocks the chat if it fails)
+      let retrieved = null;
+      try {
+        retrieved = await retrieve(text, apiKey);
+      } catch (e) {
+        console.warn("Note search failed:", e);
+      }
+
       const reply = await askGemini(apiKey, function (partial) {
         if (!botBubble) {
           hideThinking();
@@ -404,7 +591,7 @@
           botBubble.innerHTML = formatText(partial);
           scrollToBottom();
         }
-      });
+      }, retrieved);
 
       hideThinking();
       if (botBubble) {
@@ -414,6 +601,7 @@
         addBubble("bot", reply);
       }
       history.push({ role: "model", parts: [{ text: reply }] });
+      addSources(retrieved);
     } catch (err) {
       hideThinking();
       if (botBubble) botBubble.remove(); // drop a half-finished reply
