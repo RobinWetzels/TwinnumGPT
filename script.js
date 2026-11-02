@@ -24,6 +24,7 @@
   // Conversation history sent to Gemini: [{ role: "user"|"model", parts: [{text}] }]
   let history = [];
   let waiting = false;
+  let knowledgeText = "";
 
   // ---------- Safe storage helpers (never crash if blocked) ----------
   function storageGet(store, name) {
@@ -41,22 +42,29 @@
   }
 
   // ---------- Setup page from config ----------
+  // Accepts PrimaryColor (new) or themeColor (old); falls back if missing or invalid.
+  function pickThemeColor() {
+    const c = cfg.PrimaryColor || cfg.themeColor || "";
+    return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(String(c).trim()) ? String(c).trim() : "#D6336C";
+  }
+  const themeColor = pickThemeColor();
+
   document.title = cfg.name + " " + cfg.emoji;
   $("botTitle").textContent = cfg.name + " " + cfg.emoji;
   $("botTagline").textContent = cfg.tagline;
-  document.documentElement.style.setProperty("--accent", cfg.themeColor);
+  document.documentElement.style.setProperty("--accent", themeColor);
 
   // Pick white or black text depending on how bright the theme color is
   function textColorFor(hex) {
     const h = hex.replace("#", "");
     const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
-    const r = parseInt(full.substr(0, 2), 16);
-    const g = parseInt(full.substr(2, 2), 16);
-    const b = parseInt(full.substr(4, 2), 16);
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
     const brightness = (r * 299 + g * 587 + b * 114) / 1000;
     return brightness > 160 ? "#111111" : "#ffffff";
   }
-  document.documentElement.style.setProperty("--accent-text", textColorFor(cfg.themeColor));
+  document.documentElement.style.setProperty("--accent-text", textColorFor(themeColor));
 
   // ---------- Dark mode ----------
   function applyTheme(theme) {
@@ -72,6 +80,34 @@
     storageSet("localStorage", THEME_NAME, next);
   });
 
+  // ---------- Knowledge file (optional notes for the bot) ----------
+  // Everything above the first "## " line is ignored.
+  async function loadKnowledge() {
+    if (!cfg.knowledgeFile) return;
+    try {
+      const res = await fetch(cfg.knowledgeFile, { cache: "no-cache" });
+      if (!res.ok) return;
+      const raw = await res.text();
+      const start = raw.search(/^##\s/m);
+      if (start === -1) return;
+      knowledgeText = raw.slice(start).trim();
+    } catch (e) {
+      // Happens when opening index.html straight from disk. The bot still works without it.
+      console.warn("Could not load " + cfg.knowledgeFile + " (host the site to use it).");
+    }
+  }
+  const knowledgeReady = loadKnowledge();
+
+  function buildSystemText() {
+    let text = cfg.systemInstructions;
+    if (knowledgeText) {
+      text +=
+        "\n\nREFERENCE NOTES (use only when relevant to the user's question):\n" +
+        knowledgeText;
+    }
+    return text;
+  }
+
   // ---------- Safe text formatting (escape HTML FIRST) ----------
   function escapeHtml(text) {
     return text
@@ -83,7 +119,9 @@
   }
 
   function inlineFormat(text) {
-    return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    return escapeHtml(text)
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*(?!\s)([^*]+?)\*/g, "<em>$1</em>");
   }
 
   function formatText(text) {
@@ -96,10 +134,14 @@
     }
 
     lines.forEach(function (line) {
+      const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
       const bullet = line.match(/^\s*[-*•]\s+(.*)$/);
       const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
 
-      if (bullet) {
+      if (heading) {
+        closeList();
+        html += "<p><strong>" + inlineFormat(heading[1]) + "</strong></p>";
+      } else if (bullet) {
         if (listType !== "ul") { closeList(); html += "<ul>"; listType = "ul"; }
         html += "<li>" + inlineFormat(bullet[1]) + "</li>";
       } else if (numbered) {
@@ -148,8 +190,9 @@
   }
 
   // ---------- Friendly error messages ----------
-  function friendlyError(status) {
-    if (status === 400 || status === 403) {
+  function friendlyError(err) {
+    const status = err.status;
+    if (err.keyProblem) {
       return "Hmm, Google didn't accept your API key. Click the \"API key\" button and paste a valid key.";
     }
     if (status === 404) {
@@ -164,8 +207,17 @@
     return "Something went wrong (error " + status + "). Please try again.";
   }
 
+  // Shown if Google's filters block a message or reply. Kept caring on purpose,
+  // since heavy personal topics are the most likely to trip a filter.
+  const BLOCKED_REPLY =
+    "That one tripped a filter on my end, so I can't answer it properly. " +
+    "If you're going through something heavy or you don't feel safe, please call or text 988 (US) " +
+    "or reach out to someone you trust. Otherwise, try rewording it and I'm right here.";
+
   // ---------- Talk to Gemini ----------
   async function askGemini(apiKey) {
+    await knowledgeReady;
+
     const url =
       "https://generativelanguage.googleapis.com/v1beta/models/" +
       encodeURIComponent(cfg.model) +
@@ -178,35 +230,46 @@
         "x-goog-api-key": apiKey
       },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: cfg.systemInstructions }] },
+        systemInstruction: { parts: [{ text: buildSystemText() }] },
         contents: history
       })
     });
 
     if (!response.ok) {
+      let detail = "";
+      try {
+        const body = await response.json();
+        detail = (body && body.error && body.error.message) || "";
+      } catch (e) { /* no readable body */ }
+
       const err = new Error("HTTP " + response.status);
       err.status = response.status;
+      err.keyProblem =
+        response.status === 401 ||
+        response.status === 403 ||
+        (response.status === 400 && /api key/i.test(detail));
       throw err;
     }
 
     const data = await response.json();
 
     if (data.promptFeedback && data.promptFeedback.blockReason) {
-      return "I can't help with that one. Want to ask me something else?";
+      return BLOCKED_REPLY;
     }
 
-    const parts =
-      data.candidates && data.candidates[0] && data.candidates[0].content
-        ? data.candidates[0].content.parts || []
-        : [];
+    const candidate = data.candidates && data.candidates[0];
+    const parts = candidate && candidate.content ? candidate.content.parts || [] : [];
 
     // Join the text parts and skip any "thought" parts
     const text = parts
       .filter(function (p) { return !p.thought && typeof p.text === "string"; })
       .map(function (p) { return p.text; })
-      .join("");
+      .join("")
+      .trim();
 
-    return text.trim() || "I couldn't come up with a reply that time. Try asking again.";
+    if (text) return text;
+    if (candidate && candidate.finishReason === "SAFETY") return BLOCKED_REPLY;
+    return "I couldn't come up with a reply that time. Try asking again.";
   }
 
   // ---------- Sending a message ----------
@@ -238,8 +301,8 @@
       hideThinking();
       history.pop(); // remove the failed question so history stays clean
       if (err && err.status) {
-        addBubble("error", friendlyError(err.status));
-        if (err.status === 400 || err.status === 403) openKeyModal();
+        addBubble("error", friendlyError(err));
+        if (err.keyProblem) openKeyModal();
       } else {
         addBubble("error", "Can't reach the internet right now. Check your connection and try again.");
       }
@@ -259,7 +322,7 @@
   // ---------- Starting / resetting a chat ----------
   function renderStarters() {
     startersEl.innerHTML = "";
-    cfg.starterQuestions.forEach(function (q) {
+    (cfg.starterQuestions || []).forEach(function (q) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.textContent = q;
