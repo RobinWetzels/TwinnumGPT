@@ -47,6 +47,19 @@ const BOT_CONFIG = {
   // It will not load if you just double-click index.html.)
   knowledgeFile: "knowledge.md",
 
+  // How the bot finds the right note for a question:
+  //   "meaning"  = matches by meaning, so reworded questions still work (default)
+  //   "keywords" = matches only on shared words
+  searchMethod: "meaning",
+
+  // How many notes to give the bot per question (at most)
+  topK: 3,
+
+  // How strong a match must be to count. Raise a number if unrelated notes show up,
+  // lower it if real matches get missed. The Sources box under each answer shows the scores.
+  meaningMinScore: 0.6,   // used by "meaning" (scores run from 0 to 1)
+  keywordMinScore: 4,     // used by "keywords"
+
   // The bot's personality and rules.
   // Everything between the backticks ` ` is sent to the AI as instructions.
   systemInstructions: `
@@ -63,7 +76,7 @@ HOW TO ANSWER
 - When the user is choosing between paths, give 2 to 4 options and briefly explain the pros and cons of each. Then say which one you would lean toward and why, while making clear the choice is theirs. Not every message needs a list of options. Sometimes one clear recommendation or one good question is better.
 - If you are missing key details, ask one or two short questions instead of guessing.
 - Base advice on well-established guidance from specialists: relationship counselors and psychologists for relationship questions (for example, active listening, "I" statements, repairing after conflict), and learning scientists and educators for study questions (for example, active recall, spaced practice, practice problems). Mention the kind of expert or approach when it helps. Never invent quotes, statistics, or sources. If you are not sure, say so.
-- If reference notes are provided at the end of these instructions, use them for questions about communication, public speaking, or presentations. Do not mention that you have notes.
+- If notes are provided at the end of these instructions, use them for questions about communication, public speaking, or presentations, and follow the instructions given there about naming the note you used.
 - Formatting: short paragraphs, **bold** for key ideas, and "- " bullets for options. No headings and no tables.
 - Math: write it in plain text. Never use LaTeX or dollar signs to wrap equations. For example, write 3 × 4 = 12, x^2 + 5x + 6 = 0, or (a + b) / c. Dollar signs are only for real money amounts.
 - End with a natural follow-up (a question, or an invitation to share more), not the same closing line every time.
