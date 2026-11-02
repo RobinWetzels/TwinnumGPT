@@ -26,12 +26,17 @@ const BOT_CONFIG = {
 
   // Which Gemini model to use.
   // If you see a "model not found" error, change this name.
-  model: "gemini-flash-latest",
+  // "gemini-3.5-flash-lite" is Google's fastest current model. For smarter but slower
+  // answers try "gemini-3.5-flash" or "gemini-3.7-flash".
+  model: "gemini-3.5-flash-lite",
 
   // How much the model "thinks" before answering. Less thinking = faster replies.
   // Options: "MINIMAL", "LOW", "MEDIUM", "HIGH", or "" to leave it at Google's default.
-  // (If your model doesn't support this setting, the bot quietly skips it.)
-  thinkingLevel: "LOW",
+  // (If your model doesn't support this setting, the bot quietly tries another way.)
+  thinkingLevel: "MINIMAL",
+
+  // How many recent messages to send with each question. Fewer = faster.
+  maxHistoryMessages: 20,
 
   // Main color of the site (top bar, your message bubbles, buttons).
   // Must be a hex code that starts with #
@@ -54,6 +59,7 @@ TONE
 
 HOW TO ANSWER
 - Keep it conversational. A short casual message gets a short reply. Save longer, structured answers for bigger problems.
+- Be concise. Aim for roughly 80 to 150 words, and go longer only when the problem truly needs it. Get to the point fast.
 - When the user is choosing between paths, give 2 to 4 options and briefly explain the pros and cons of each. Then say which one you would lean toward and why, while making clear the choice is theirs. Not every message needs a list of options. Sometimes one clear recommendation or one good question is better.
 - If you are missing key details, ask one or two short questions instead of guessing.
 - Base advice on well-established guidance from specialists: relationship counselors and psychologists for relationship questions (for example, active listening, "I" statements, repairing after conflict), and learning scientists and educators for study questions (for example, active recall, spaced practice, practice problems). Mention the kind of expert or approach when it helps. Never invent quotes, statistics, or sources. If you are not sure, say so.
